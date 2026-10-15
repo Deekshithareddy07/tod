@@ -92,6 +92,41 @@ jobs:
   includeUpstreamWhenRebuild: false
   includeDownstreamWhenRebuild: false
   timeout: 3600
+- name: CI
+  steps:
+  - type: CheckoutStep
+    name: checkout
+    cloneCredential:
+      type: DefaultCredential
+    withLfs: false
+    withSubmodules: false
+    condition: SUCCESSFUL
+    optional: false
+  - type: CommandStep
+    name: test and build
+    runInContainer: true
+    image: golang:1.22.1
+    interpreter:
+      type: PosixInterpreter
+      shell: sh
+      commands: |
+        go test -v ./...
+        go build -v .
+    runAs: 0:0
+    useTTY: false
+    condition: SUCCESSFUL
+    optional: false
+  triggers:
+  - type: BranchUpdateTrigger
+    branches: '**'
+    userMatch: anyone
+    projects: onedev/tod
+  retryCondition: never
+  maxRetries: 3
+  retryDelay: 30
+  includeUpstreamWhenRebuild: false
+  includeDownstreamWhenRebuild: false
+  timeout: 1800
 - name: Sync with GitHub
   steps:
   - type: CheckoutStep

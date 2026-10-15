@@ -1,0 +1,98 @@
+name: Sync to OneDev & Trigger CI
+
+on:
+  push:
+    branches:
+      - '**'
+    tags:
+      - '**'
+  workflow_dispatch:
+    inputs:
+      force_sync:
+        description: 'Force sync even if commit hashes match'
+        required: false
+        type: boolean
+        default: false
+
+concurrency:
+  group: onedev-sync-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  sync-to-onedev:
+    name: Sync Branch/Tag to OneDev
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Validate Secrets & Setup Remote
+        id: setup
+        env:
+          ONEDEV_TOKEN: ${{ secrets.ONEDEV_TOKEN }}
+          ONEDEV_SERVER_URL: ${{ secrets.ONEDEV_SERVER_URL || vars.ONEDEV_SERVER_URL || 'https://code.onedev.io' }}
+          ONEDEV_PROJECT: ${{ secrets.ONEDEV_PROJECT || vars.ONEDEV_PROJECT || 'onedev/tod' }}
+        run: |
+          if [ -z "$ONEDEV_TOKEN" ]; then
+            echo "::error::Secret ONEDEV_TOKEN is missing! Please configure ONEDEV_TOKEN in GitHub repository Secrets."
+            exit 1
+          fi
+
+          # Clean server URL (strip trailing slashes)
+          SERVER_URL="${ONEDEV_SERVER_URL%/}"
+          REMOTE_URL="${SERVER_URL}/${ONEDEV_PROJECT}"
+
+          echo "Target OneDev remote: ${REMOTE_URL}"
+          echo "remote_url=${REMOTE_URL}" >> "$GITHUB_OUTPUT"
+          echo "server_url=${SERVER_URL}" >> "$GITHUB_OUTPUT"
+          echo "project=${ONEDEV_PROJECT}" >> "$GITHUB_OUTPUT"
+
+      - name: Sync Git Ref & Prevent Loops
+        env:
+          ONEDEV_TOKEN: ${{ secrets.ONEDEV_TOKEN }}
+          REMOTE_URL: ${{ steps.setup.outputs.remote_url }}
+          SERVER_URL: ${{ steps.setup.outputs.server_url }}
+          FORCE_SYNC: ${{ github.event.inputs.force_sync || 'false' }}
+        run: |
+          # Configure Git authentication via Bearer token without embedding credentials in URLs
+          git config --local "http.${SERVER_URL}/.extraHeader" "Authorization: Bearer ${ONEDEV_TOKEN}"
+          git remote add onedev "${REMOTE_URL}"
+
+          REF_NAME="${GITHUB_REF_NAME}"
+          REF_TYPE="${GITHUB_REF_TYPE}" # "branch" or "tag"
+          CURRENT_SHA="${GITHUB_SHA}"
+
+          echo "Current Git Ref: ${REF_TYPE} '${REF_NAME}' (${CURRENT_SHA})"
+
+          if [ "$REF_TYPE" = "branch" ]; then
+            # Query the remote branch commit hash on OneDev
+            REMOTE_SHA=$(git ls-remote --heads onedev "$REF_NAME" | awk '{print $1}')
+
+            if [ -n "$REMOTE_SHA" ] && [ "$REMOTE_SHA" = "$CURRENT_SHA" ] && [ "$FORCE_SYNC" != "true" ]; then
+              echo "==> OneDev branch '${REF_NAME}' is already at commit ${CURRENT_SHA}."
+              echo "==> Skipping push to prevent redundant sync loops."
+              exit 0
+            fi
+
+            echo "==> Pushing branch '${REF_NAME}' to OneDev..."
+            git push onedev "HEAD:refs/heads/${REF_NAME}"
+          elif [ "$REF_TYPE" = "tag" ]; then
+            echo "==> Pushing tag '${REF_NAME}' to OneDev..."
+            git push onedev "refs/tags/${REF_NAME}"
+          fi
+
+          echo "==> Successfully synchronized to OneDev."
+
+      - name: OneDev CI Dashboard
+        env:
+          SERVER_URL: ${{ steps.setup.outputs.server_url }}
+          PROJECT: ${{ steps.setup.outputs.project }}
+        run: |
+          echo "### OneDev CI Triggered 🚀" >> $GITHUB_STEP_SUMMARY
+          echo "The changes have been pushed to OneDev. OneDev's native CI build triggers are now active." >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "- **OneDev Project**: [${PROJECT}](${SERVER_URL}/${PROJECT})" >> $GITHUB_STEP_SUMMARY
+          echo "- **OneDev Builds**: [View Builds](${SERVER_URL}/${PROJECT}/~builds)" >> $GITHUB_STEP_SUMMARY
+          echo "- **Git Ref**: \`${GITHUB_REF_NAME}\` (\`${GITHUB_SHA}\`)" >> $GITHUB_STEP_SUMMARY
