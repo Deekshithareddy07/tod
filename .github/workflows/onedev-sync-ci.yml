@@ -1,10 +1,13 @@
-name: Sync to OneDev & Trigger CI
+name: CI & OneDev Sync
 
 on:
   push:
     branches:
       - '**'
     tags:
+      - '**'
+  pull_request:
+    branches:
       - '**'
   workflow_dispatch:
     inputs:
@@ -15,13 +18,40 @@ on:
         default: false
 
 concurrency:
-  group: onedev-sync-${{ github.ref }}
+  group: ci-sync-${{ github.ref }}
   cancel-in-progress: false
 
 jobs:
-  sync-to-onedev:
-    name: Sync Branch/Tag to OneDev
+  test-and-build:
+    name: Build & Test (Go)
     runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.22'
+          cache: true
+
+      - name: Verify Dependencies
+        run: go mod verify
+
+      - name: Run Tests
+        run: go test -v ./...
+
+      - name: Build Binary
+        run: go build -v -o tod .
+
+      - name: Verify Binary
+        run: ./tod version
+
+  sync-to-onedev:
+    name: Sync to OneDev
+    needs: test-and-build
+    runs-on: ubuntu-latest
+    if: github.event_name != 'pull_request'
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v4
@@ -36,11 +66,11 @@ jobs:
           ONEDEV_PROJECT: ${{ secrets.ONEDEV_PROJECT || vars.ONEDEV_PROJECT || 'onedev/tod' }}
         run: |
           if [ -z "$ONEDEV_TOKEN" ]; then
-            echo "::error::Secret ONEDEV_TOKEN is missing! Please configure ONEDEV_TOKEN in GitHub repository Secrets."
-            exit 1
+            echo "::warning::Secret ONEDEV_TOKEN is not configured yet. To sync to OneDev, add ONEDEV_TOKEN to GitHub repository secrets."
+            echo "skip_sync=true" >> "$GITHUB_OUTPUT"
+            exit 0
           fi
 
-          # Clean server URL (strip trailing slashes)
           SERVER_URL="${ONEDEV_SERVER_URL%/}"
           REMOTE_URL="${SERVER_URL}/${ONEDEV_PROJECT}"
 
@@ -48,31 +78,30 @@ jobs:
           echo "remote_url=${REMOTE_URL}" >> "$GITHUB_OUTPUT"
           echo "server_url=${SERVER_URL}" >> "$GITHUB_OUTPUT"
           echo "project=${ONEDEV_PROJECT}" >> "$GITHUB_OUTPUT"
+          echo "skip_sync=false" >> "$GITHUB_OUTPUT"
 
       - name: Sync Git Ref & Prevent Loops
+        if: steps.setup.outputs.skip_sync != 'true'
         env:
           ONEDEV_TOKEN: ${{ secrets.ONEDEV_TOKEN }}
           REMOTE_URL: ${{ steps.setup.outputs.remote_url }}
           SERVER_URL: ${{ steps.setup.outputs.server_url }}
           FORCE_SYNC: ${{ github.event.inputs.force_sync || 'false' }}
         run: |
-          # Configure Git authentication via Bearer token without embedding credentials in URLs
           git config --local "http.${SERVER_URL}/.extraHeader" "Authorization: Bearer ${ONEDEV_TOKEN}"
           git remote add onedev "${REMOTE_URL}"
 
           REF_NAME="${GITHUB_REF_NAME}"
-          REF_TYPE="${GITHUB_REF_TYPE}" # "branch" or "tag"
+          REF_TYPE="${GITHUB_REF_TYPE}"
           CURRENT_SHA="${GITHUB_SHA}"
 
           echo "Current Git Ref: ${REF_TYPE} '${REF_NAME}' (${CURRENT_SHA})"
 
           if [ "$REF_TYPE" = "branch" ]; then
-            # Query the remote branch commit hash on OneDev
             REMOTE_SHA=$(git ls-remote --heads onedev "$REF_NAME" | awk '{print $1}')
 
             if [ -n "$REMOTE_SHA" ] && [ "$REMOTE_SHA" = "$CURRENT_SHA" ] && [ "$FORCE_SYNC" != "true" ]; then
-              echo "==> OneDev branch '${REF_NAME}' is already at commit ${CURRENT_SHA}."
-              echo "==> Skipping push to prevent redundant sync loops."
+              echo "==> OneDev branch '${REF_NAME}' is already at commit ${CURRENT_SHA}. Skipping push."
               exit 0
             fi
 
@@ -86,6 +115,7 @@ jobs:
           echo "==> Successfully synchronized to OneDev."
 
       - name: OneDev CI Dashboard
+        if: steps.setup.outputs.skip_sync != 'true'
         env:
           SERVER_URL: ${{ steps.setup.outputs.server_url }}
           PROJECT: ${{ steps.setup.outputs.project }}
