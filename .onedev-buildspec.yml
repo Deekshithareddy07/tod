@@ -99,11 +99,11 @@ jobs:
     cloneCredential:
       type: DefaultCredential
     withLfs: false
-    withSubmodules: true
+    withSubmodules: false
     condition: SUCCESSFUL
     optional: false
   - type: CommandStep
-    name: test
+    name: test and build
     runInContainer: true
     image: golang:1.22.1
     interpreter:
@@ -112,17 +112,18 @@ jobs:
       commands: |
         go vet ./...
         go test -v -race ./...
+        go build -v .
     runAs: 0:0
     useTTY: false
     condition: SUCCESSFUL
     optional: false
   triggers:
   - type: BranchUpdateTrigger
-    branches: main
+    branches: '**'
     userMatch: anyone
     projects: onedev/tod
   - type: PullRequestUpdateTrigger
-    branches: main
+    branches: '**'
     userMatch: anyone
     projects: onedev/tod
   retryCondition: never

@@ -8,6 +8,10 @@ on:
       - 'v*'
   workflow_dispatch:
 
+concurrency:
+  group: sync-onedev-${{ github.ref }}
+  cancel-in-progress: false
+
 permissions:
   contents: read
 
@@ -23,8 +27,8 @@ jobs:
 
       - name: Push to OneDev
         env:
-          ONEDEV_SERVER_URL: ${{ secrets.ONEDEV_SERVER_URL || 'https://code.onedev.io' }}
-          ONEDEV_PROJECT: ${{ secrets.ONEDEV_PROJECT || 'onedev/tod' }}
+          ONEDEV_SERVER_URL: ${{ secrets.ONEDEV_SERVER_URL || vars.ONEDEV_SERVER_URL || 'https://code.onedev.io' }}
+          ONEDEV_PROJECT: ${{ secrets.ONEDEV_PROJECT || vars.ONEDEV_PROJECT || 'onedev/tod' }}
           ONEDEV_USER: ${{ secrets.ONEDEV_USER }}
           ONEDEV_TOKEN: ${{ secrets.ONEDEV_TOKEN }}
           ONEDEV_SSH_KEY: ${{ secrets.ONEDEV_SSH_KEY }}
@@ -71,6 +75,5 @@ jobs:
             git push --tags "${TARGET_REMOTE}" HEAD:main
 
           else
-            echo "::error::Neither ONEDEV_TOKEN nor ONEDEV_SSH_KEY is configured in GitHub repository secrets."
-            exit 1
+            echo "::warning::Neither ONEDEV_TOKEN nor ONEDEV_SSH_KEY is configured in GitHub repository secrets. Skipping sync to OneDev."
           fi
