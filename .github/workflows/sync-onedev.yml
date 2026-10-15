@@ -1,0 +1,76 @@
+name: Sync to OneDev
+
+on:
+  push:
+    branches:
+      - main
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  sync:
+    name: Mirror GitHub to OneDev
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Push to OneDev
+        env:
+          ONEDEV_SERVER_URL: ${{ secrets.ONEDEV_SERVER_URL || 'https://code.onedev.io' }}
+          ONEDEV_PROJECT: ${{ secrets.ONEDEV_PROJECT || 'onedev/tod' }}
+          ONEDEV_USER: ${{ secrets.ONEDEV_USER }}
+          ONEDEV_TOKEN: ${{ secrets.ONEDEV_TOKEN }}
+          ONEDEV_SSH_KEY: ${{ secrets.ONEDEV_SSH_KEY }}
+          ONEDEV_SSH_HOST: ${{ secrets.ONEDEV_SSH_HOST }}
+          ONEDEV_SSH_PORT: ${{ secrets.ONEDEV_SSH_PORT || '6611' }}
+        run: |
+          set -e
+
+          if [ -n "$ONEDEV_SSH_KEY" ]; then
+            echo "Authenticating to OneDev using SSH key..."
+            mkdir -p ~/.ssh
+            echo "$ONEDEV_SSH_KEY" > ~/.ssh/id_onedev
+            chmod 600 ~/.ssh/id_onedev
+
+            HOST="${ONEDEV_SSH_HOST:-code.onedev.io}"
+            PORT="${ONEDEV_SSH_PORT}"
+
+            cat >> ~/.ssh/config <<EOF
+          Host onedev-remote
+            HostName ${HOST}
+            Port ${PORT}
+            IdentityFile ~/.ssh/id_onedev
+            StrictHostKeyChecking no
+            UserKnownHostsFile /dev/null
+          EOF
+
+            TARGET_REMOTE="ssh://git@onedev-remote/${ONEDEV_PROJECT}.git"
+            echo "Pushing branch and tags to ${TARGET_REMOTE}..."
+            git push --tags "${TARGET_REMOTE}" HEAD:main
+
+          elif [ -n "$ONEDEV_TOKEN" ]; then
+            echo "Authenticating to OneDev using HTTP token..."
+            RAW_HOST=$(echo "$ONEDEV_SERVER_URL" | sed -E 's~^https?://~~' | sed -E 's~/$~~')
+            PROTOCOL=$(echo "$ONEDEV_SERVER_URL" | grep -oE '^https?' || echo "https")
+
+            if [ -n "$ONEDEV_USER" ]; then
+              AUTH="${ONEDEV_USER}:${ONEDEV_TOKEN}"
+            else
+              AUTH="${ONEDEV_TOKEN}"
+            fi
+
+            TARGET_REMOTE="${PROTOCOL}://${AUTH}@${RAW_HOST}/${ONEDEV_PROJECT}.git"
+            echo "Pushing branch and tags to OneDev (${RAW_HOST}/${ONEDEV_PROJECT})..."
+            git push --tags "${TARGET_REMOTE}" HEAD:main
+
+          else
+            echo "::error::Neither ONEDEV_TOKEN nor ONEDEV_SSH_KEY is configured in GitHub repository secrets."
+            exit 1
+          fi

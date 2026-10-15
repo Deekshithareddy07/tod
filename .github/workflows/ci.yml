@@ -1,0 +1,86 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+
+jobs:
+  test:
+    name: Test & Lint
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.22'
+          cache: true
+
+      - name: Verify dependencies
+        run: go mod verify
+
+      - name: Check code formatting
+        run: |
+          UNFORMATTED=$(gofmt -l .)
+          if [ -n "$UNFORMATTED" ]; then
+            echo "The following files are not properly formatted:"
+            echo "$UNFORMATTED"
+            exit 1
+          fi
+
+      - name: Vet code
+        run: go vet ./...
+
+      - name: Run unit & regression tests
+        run: go test -v -race ./...
+
+  build-matrix:
+    name: Cross-compile (${{ matrix.goos }}/${{ matrix.goarch }})
+    needs: test
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - goos: linux
+            goarch: amd64
+          - goos: linux
+            goarch: arm64
+          - goos: windows
+            goarch: amd64
+          - goos: windows
+            goarch: arm64
+          - goos: darwin
+            goarch: amd64
+          - goos: darwin
+            goarch: arm64
+          - goos: freebsd
+            goarch: amd64
+          - goos: freebsd
+            goarch: arm64
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.22'
+          cache: true
+
+      - name: Build binary
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+        run: |
+          EXT=""
+          if [ "${{ matrix.goos }}" = "windows" ]; then
+            EXT=".exe"
+          fi
+          go build -v -o "tod-${{ matrix.goos }}-${{ matrix.goarch }}${EXT}" .
